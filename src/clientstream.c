@@ -330,7 +330,14 @@ ClientStream *clientstream_opensocket(int port) {
     int set = true;
 #endif
 #ifndef __NDS__
-    setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&set, sizeof(set));
+    int nodelay_result = setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&set, sizeof(set));
+    if (nodelay_result < 0) {
+        printf("WARNING: TCP_NODELAY failed to set! Error: %d\n", nodelay_result);
+        fflush(stdout);
+    } else {
+        printf("DEBUG: TCP_NODELAY successfully enabled\n");
+        fflush(stdout);
+    }
 #endif
 #if !defined(__3DS__) && !defined(__WIIU__)
     struct timeval socket_timeout = {30, 0};
@@ -527,10 +534,43 @@ int clientstream_read_bytes(ClientStream *stream, int8_t *dst, int off, int len)
 
 int clientstream_write(ClientStream *stream, const int8_t *src, int len, int off) {
     if (!stream->closed) {
+        int result;
 #if defined(_WIN32) || defined(__SWITCH__) || defined(__NDS__) || defined(__wasm)
-        return send(stream->socket, (const char *)src + off, len, 0);
+        result = send(stream->socket, (const char *)src + off, len, 0);
+        if (result < 0) {
+#ifdef _WIN32
+            int error = WSAGetLastError();
+            printf("ERROR: send() failed! Requested=%d, Result=%d, WSAError=%d\n", len, result, error);
+            fflush(stdout);
 #else
-        return write(stream->socket, src + off, len);
+            printf("ERROR: send() failed! Requested=%d, Result=%d\n", len, result);
+            fflush(stdout);
+#endif
+        } else if (result < len) {
+            printf("WARNING: Partial send! Requested=%d, Sent=%d\n", len, result);
+            fflush(stdout);
+        } else {
+#ifdef _WIN32
+            printf("DEBUG: send() succeeded! Sent=%d bytes, hex dump:\n  ", result);
+            for (int i = 0; i < result && i < 32; i++) {
+                printf("%02X ", (unsigned char)(src[off + i]));
+                if ((i + 1) % 16 == 0 && i + 1 < result) printf("\n  ");
+            }
+            printf("\n");
+            fflush(stdout);
+#endif
+        }
+        return result;
+#else
+        result = write(stream->socket, src + off, len);
+        if (result < 0) {
+            printf("ERROR: write() failed! Requested=%d, Result=%d\n", len, result);
+            fflush(stdout);
+        } else if (result < len) {
+            printf("WARNING: Partial write! Requested=%d, Sent=%d\n", len, result);
+            fflush(stdout);
+        }
+        return result;
 #endif
     }
 

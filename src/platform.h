@@ -42,6 +42,7 @@ Surface *platform_create_surface(int *pixels, int width, int height, int alpha);
 void platform_free_surface(Surface *surface);
 void rs2_log(const char *format, ...);
 void rs2_error(const char *format, ...);
+void rs2_debug(const char *format, ...);
 char *platform_strndup(const char *s, size_t len);
 char *platform_strdup(const char *s);
 // int platform_asprintf(char **str, const char *fmt, ...);

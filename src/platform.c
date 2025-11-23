@@ -292,6 +292,20 @@ void rs2_error(const char *format, ...) {
     va_end(args);
 }
 
+void rs2_debug(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+#if SDL > 1
+    SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO,
+                    format, args);
+#else
+    vfprintf(stdout, format, args);
+#endif
+
+    va_end(args);
+}
+
 // Java Math.random, rand requires + 1 to never reach 1 else it'll overflow on update_flame_buffer
 #ifdef USE_FLOATS
 double jrand(void) {

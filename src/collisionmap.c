@@ -28,11 +28,12 @@ void collisionmap_free(CollisionMap *map) {
 void collisionmap_reset(CollisionMap *map) {
     for (int x = 0; x < map->sizeX; x++) {
         for (int z = 0; z < map->sizeZ; z++) {
-            if (x == 0 || z == 0 || x == map->sizeX - 1 || z == map->sizeZ - 1) {
+            /* Disabled: Allow walking through all tiles (no collision) */
+            /* if (x == 0 || z == 0 || x == map->sizeX - 1 || z == map->sizeZ - 1) {
                 map->flags[x][z] = 0xffffff;
-            } else {
+            } else { */
                 map->flags[x][z] = 0;
-            }
+            /* } */
         }
     }
 }
@@ -171,13 +172,22 @@ void collisionmap_add_loc(CollisionMap *map, int tileX, int tileZ, int sizeX, in
 }
 
 void collisionmap_set_blocked(CollisionMap *map, int tileX, int tileZ) {
-    int x = tileX - map->offsetX;
+    /* Disabled: Allow walking through all tiles (no collision) */
+    /* int x = tileX - map->offsetX;
     int z = tileZ - map->offsetZ;
-    map->flags[x][z] |= 0x200000;
+    map->flags[x][z] |= 0x200000; */
+    (void)map;
+    (void)tileX;
+    (void)tileZ;
 }
 
 void collisionmap_add_cmap(CollisionMap *map, int x, int z, int flags) {
-    map->flags[x][z] |= flags;
+    /* Disabled: Allow walking through all tiles (no collision) */
+    /* map->flags[x][z] |= flags; */
+    (void)map;
+    (void)x;
+    (void)z;
+    (void)flags;
 }
 
 void collisionmap_del_wall(CollisionMap *map, int tileX, int tileZ, int shape, int rotation, bool blockrange) {

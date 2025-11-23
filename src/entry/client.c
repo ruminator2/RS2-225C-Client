@@ -86,14 +86,18 @@ ClientData _Client = {
     .rsa_exponent = "58778699976184461502525193738213253649000149147835990136706041084440742975821",
     .rsa_modulus = "7162900525229798032761816791230527296329313291232324290237849263501208207972894053929065636522363163621000728841182238772712427862772219676577293600221789",
 #else
-    // original rsa keys in hex
-    .rsa_exponent = "81f390b2cf8ca7039ee507975951d5a0b15a87bf8b3f99c966834118c50fd94d", // pad exponent to an even number (prefix a 0 if needed)
-    .rsa_modulus = "88c38748a58228f7261cdc340b5691d7d0975dee0ecdb717609e6bf971eb3fe723ef9d130e4686813739768ad9472eb46d8bfcc042c1a5fcb05e931f632eea5d",
+    // RSA disabled by default - will be loaded from config.ini if present
+    .rsa_exponent = "",
+    .rsa_modulus = "",
 #endif
 };
 
 const int CHAT_COLORS[6] = {YELLOW, RED, GREEN, CYAN, MAGENTA, WHITE};
 const int LOC_SHAPE_TO_LAYER[23] = {0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3};
+
+// Command-line username/password storage
+static char cmdline_username[USERNAME_LENGTH + 1] = "";
+static char cmdline_password[PASSWORD_LENGTH + 1] = "";
 
 // TODO add more static funcs here
 static void client_draw_interface(Client *c, Component *com, int x, int y, int scrollY);
@@ -158,12 +162,12 @@ void client_load(Client *c) {
     c->archive_checksum[8] = 0;
     while (c->archive_checksum[8] == 0) {
         client_draw_progress(c, "Connecting to fileserver", 10);
+#ifdef __wasm
         char message[PATH_MAX];
         sprintf(message, "crc%d", (int)(jrand() * 9.9999999e7));
         int size = 0;
         int8_t *buffer = client_openurl(message, &size);
         if (!buffer) {
-#ifdef __wasm
             for (int i = retry; i > 0; i--) {
                 sprintf(message, "Error loading - Will retry in %d secs.", i);
                 client_draw_progress(c, message, 10);
@@ -173,24 +177,24 @@ void client_load(Client *c) {
             if (retry > 60) {
                 retry = 60;
             }
-#else
-            // TODO: hardcoded for now add openurl
-            c->archive_checksum[0] = 0;
-            c->archive_checksum[1] = 784449929;
-            c->archive_checksum[2] = -1494598746;
-            c->archive_checksum[3] = 1614084464;
-            c->archive_checksum[4] = 855958935;
-            c->archive_checksum[5] = -2000991154;
-            c->archive_checksum[6] = -313801935;
-            c->archive_checksum[7] = 1570981179;
-            c->archive_checksum[8] = -1532605973;
-#endif
         } else {
             Packet *checksums = packet_new(buffer, size); // 36
             for (int i = 0; i < 9; i++) {
                 c->archive_checksum[i] = g4(checksums);
             }
         }
+#else
+        // TODO: hardcoded for now add openurl
+        c->archive_checksum[0] = 0;
+        c->archive_checksum[1] = 784449929;
+        c->archive_checksum[2] = -1494598746;
+        c->archive_checksum[3] = 1614084464;
+        c->archive_checksum[4] = 855958935;
+        c->archive_checksum[5] = -2000991154;
+        c->archive_checksum[6] = -313801935;
+        c->archive_checksum[7] = 1570981179;
+        c->archive_checksum[8] = -1532605973;
+#endif
     }
 
     c->archive_title = load_archive(c, "title", c->archive_checksum[1], "title screen", 10);
@@ -2520,8 +2524,22 @@ static void client_update_orbit_camera(Client *c) {
 }
 
 static bool client_try_move(Client *c, int srcX, int srcZ, int dx, int dz, int type, int locWidth, int locLength, int locRotation, int locShape, int forceapproach, bool tryNearest) {
+    printf("DEBUG client_try_move: srcX=%d srcZ=%d dx=%d dz=%d sceneBaseTileX=%d sceneBaseTileZ=%d\n", 
+           srcX, srcZ, dx, dz, c->sceneBaseTileX, c->sceneBaseTileZ);
+    
     int8_t sceneWidth = 104;
     int8_t sceneLength = 104;
+    
+    if (srcX < 0 || srcX >= sceneWidth || srcZ < 0 || srcZ >= sceneLength) {
+        printf("ERROR: srcX/srcZ out of bounds! srcX=%d srcZ=%d (valid range 0-103)\n", srcX, srcZ);
+        return false;
+    }
+    
+    if (dx < 0 || dx >= sceneWidth || dz < 0 || dz >= sceneLength) {
+        printf("ERROR: dx/dz out of bounds! dx=%d dz=%d (valid range 0-103)\n", dx, dz);
+        return false;
+    }
+    
     for (int x = 0; x < sceneWidth; x++) {
         for (int z = 0; z < sceneLength; z++) {
             c->bfsDirection[x][z] = 0;
@@ -2697,6 +2715,8 @@ static bool client_try_move(Client *c, int srcX, int srcZ, int dx, int dz, int t
         next = c->bfsDirection[x][z];
     }
 
+    printf("DEBUG BFS result: arrived=%d length=%d\n", arrived, length);
+    
     if (length > 0) {
         bufferSize = length;
 
@@ -2708,6 +2728,9 @@ static bool client_try_move(Client *c, int srcX, int srcZ, int dx, int dz, int t
 
         int startX = c->bfsStepX[length];
         int startZ = c->bfsStepZ[length];
+        
+        printf("DEBUG BFS path found: startX=%d startZ=%d worldX=%d worldZ=%d bufferSize=%d\n",
+               startX, startZ, startX + c->sceneBaseTileX, startZ + c->sceneBaseTileZ, bufferSize);
 
         // TODO showdebug
         // if (c->showDebug && super.actionKey[6] == 1 && super.actionKey[7] == 1) {
@@ -2725,17 +2748,29 @@ static bool client_try_move(Client *c, int srcX, int srcZ, int dx, int dz, int t
         // 	return false;
         // }
 
+        static int movement_packet_seq = 0;
+        movement_packet_seq++;
+        printf("DEBUG Sending movement packet #%d: type=%d opcode=%d length=%d\n", 
+               movement_packet_seq, type, (type == 0 ? 181 : (type == 1 ? 165 : 93)), bufferSize + bufferSize + 3);
+        
+        int opcode_base = (type == 0 ? 181 : (type == 1 ? 165 : 93));
+        int isaac_key = isaac_next(&c->out->random);
+        int encrypted_opcode = (opcode_base + isaac_key) & 0xFF;
+        printf("DEBUG ISAAC encrypt: opcode=%d + isaac_key=%d = encrypted=0x%02X\n", 
+               opcode_base, isaac_key, encrypted_opcode);
+        fflush(stdout);
+        
         if (type == 0) {
             // MOVE_GAMECLICK
-            p1isaac(c->out, 181);
+            p1(c->out, encrypted_opcode);
             p1(c->out, bufferSize + bufferSize + 3);
         } else if (type == 1) {
             // MOVE_MINIMAPCLICK
-            p1isaac(c->out, 165);
+            p1(c->out, encrypted_opcode);
             p1(c->out, bufferSize + bufferSize + 3 + 14);
         } else if (type == 2) {
             // MOVE_OPCLICK
-            p1isaac(c->out, 93);
+            p1(c->out, encrypted_opcode);
             p1(c->out, bufferSize + bufferSize + 3);
         }
 
@@ -2747,6 +2782,9 @@ static bool client_try_move(Client *c, int srcX, int srcZ, int dx, int dz, int t
 
         p2(c->out, startX + c->sceneBaseTileX);
         p2(c->out, startZ + c->sceneBaseTileZ);
+        
+        printf("DEBUG Packet data: ctrl=%d worldX=%d worldZ=%d waypoints=%d out->pos=%d\n",
+               c->shell->action_key[5], startX + c->sceneBaseTileX, startZ + c->sceneBaseTileZ, bufferSize - 1, c->out->pos);
         c->flagSceneTileX = c->bfsStepX[0];
         c->flagSceneTileZ = c->bfsStepZ[0];
 
@@ -4591,7 +4629,11 @@ void client_update_game(Client *c) {
 
         // try {
         if (c->stream && c->out->pos > 0) {
-            clientstream_write(c->stream, c->out->data, c->out->pos, 0);
+            printf("DEBUG: Flushing %d bytes from out buffer\n", c->out->pos);
+            fflush(stdout);
+            int sent = clientstream_write(c->stream, c->out->data, c->out->pos, 0);
+            printf("DEBUG: Flush result: sent=%d, expected=%d\n", sent, c->out->pos);
+            fflush(stdout);
             c->out->pos = 0;
             c->heartbeatTimer = 0;
         }
@@ -5860,11 +5902,15 @@ bool client_read(Client *c) {
 
 void getPlayerLocal(Client *c, Packet *buf, int size) {
     (void)size;
+    // rs2_error("[DEBUG] getPlayerLocal start - pos:%d, bit_pos:%d\n", buf->pos, buf->bit_pos);
     access_bits(buf);
+    // rs2_error("[DEBUG] After access_bits - pos:%d, bit_pos:%d\n", buf->pos, buf->bit_pos);
 
     int info = gbit(buf, 1);
+    // rs2_error("[DEBUG] Local player update info bit:%d\n", info);
     if (info != 0) {
         int op = gbit(buf, 2);
+        // rs2_error("[DEBUG] Local player op:%d\n", op);
 
         if (op == 0) {
             c->entityUpdateIds[c->entityUpdateCount++] = LOCAL_PLAYER_INDEX;
@@ -5888,6 +5934,7 @@ void getPlayerLocal(Client *c, Packet *buf, int size) {
             }
         } else if (op == 3) {
             c->currentLevel = gbit(buf, 2);
+            // rs2_error("[DEBUG] Placement - level:%d\n", c->currentLevel);
             // TODO:
             // if (c->showDebug) {
             // 	c->userTileMarkers = ground_new(4);
@@ -5896,14 +5943,17 @@ void getPlayerLocal(Client *c, Packet *buf, int size) {
             int localX = gbit(buf, 7);
             int localZ = gbit(buf, 7);
             int jump = gbit(buf, 1);
+            // rs2_error("[DEBUG] Placement - x:%d, z:%d, jump:%d\n", localX, localZ, jump);
             pathingentity_teleport(&c->local_player->pathing_entity, jump == 1, localX, localZ);
 
             int extendedInfo = gbit(buf, 1);
+            // rs2_error("[DEBUG] Placement - extendedInfo:%d\n", extendedInfo);
             if (extendedInfo == 1) {
                 c->entityUpdateIds[c->entityUpdateCount++] = LOCAL_PLAYER_INDEX;
             }
         }
     }
+    // rs2_error("[DEBUG] getPlayerLocal end - pos:%d, bit_pos:%d, updateCount:%d\n", buf->pos, buf->bit_pos, c->entityUpdateCount);
 }
 
 void getPlayerOldVis(Client *c, Packet *buf, int size) {
@@ -5971,13 +6021,23 @@ void getPlayerOldVis(Client *c, Packet *buf, int size) {
 
 void getPlayerNewVis(Client *c, int size, Packet *buf) {
     int index;
+    int added_count = 0;
+    rs2_debug("[CLIENT DEBUG] getPlayerNewVis START - size:%d bytes (%d bits), bit_pos:%d, local_player pos:(%d,%d)\n", 
+              size, size * 8, buf->bit_pos, 
+              c->local_player->pathing_entity.pathTileX[0], 
+              c->local_player->pathing_entity.pathTileZ[0]);
+    
     while (buf->bit_pos + 10 < size * 8) {
         index = gbit(buf, 11);
+        rs2_debug("[CLIENT DEBUG]   Read player index:%d at bit_pos:%d\n", index, buf->bit_pos - 11);
+        
         if (index == 2047) {
+            rs2_debug("[CLIENT DEBUG]   End marker (2047) reached\n");
             break;
         }
 
         if (!c->players[index]) {
+            rs2_debug("[CLIENT DEBUG]   Creating new player at index %d\n", index);
             c->players[index] = playerentity_new();
             if (c->player_appearance_buffer[index]) {
                 playerentity_read(c->players[index], c->player_appearance_buffer[index]);
@@ -5987,6 +6047,7 @@ void getPlayerNewVis(Client *c, int size, Packet *buf) {
         c->player_ids[c->player_count++] = index;
         PlayerEntity *player = c->players[index];
         player->pathing_entity.cycle = _Client.loop_cycle;
+        
         int dx = gbit(buf, 5);
         if (dx > 15) {
             dx -= 32;
@@ -5996,15 +6057,27 @@ void getPlayerNewVis(Client *c, int size, Packet *buf) {
             dz -= 32;
         }
         int jump = gbit(buf, 1);
-        pathingentity_teleport(&player->pathing_entity, jump == 1, c->local_player->pathing_entity.pathTileX[0] + dx, c->local_player->pathing_entity.pathTileZ[0] + dz);
+        
+        int abs_x = c->local_player->pathing_entity.pathTileX[0] + dx;
+        int abs_z = c->local_player->pathing_entity.pathTileZ[0] + dz;
+        
+        rs2_debug("[CLIENT DEBUG]   Player %d: dx=%d dz=%d jump=%d -> absolute pos:(%d,%d)\n", 
+                  index, dx, dz, jump, abs_x, abs_z);
+        
+        pathingentity_teleport(&player->pathing_entity, jump == 1, abs_x, abs_z);
 
         int extendedInfo = gbit(buf, 1);
         if (extendedInfo == 1) {
             c->entityUpdateIds[c->entityUpdateCount++] = index;
         }
+        
+        added_count++;
     }
 
+    rs2_debug("[CLIENT DEBUG] getPlayerNewVis END - added %d players, switching to byte access. pos:%d, bit_pos:%d\n", 
+              added_count, buf->pos, buf->bit_pos);
     access_bytes(buf);
+    // rs2_error("[DEBUG] After access_bytes - pos:%d\n", buf->pos);
 }
 
 void getPlayerExtended(Client *c, Packet *buf, int size) {
@@ -6147,10 +6220,24 @@ void getPlayer(Client *c, Packet *buf, int size) {
     c->entityRemovalCount = 0;
     c->entityUpdateCount = 0;
 
+    // rs2_error("[DEBUG] getPlayer start - packet size:%d, initial pos:%d\n", size, buf->pos);
+    // Dump first 10 bytes of packet
+    // rs2_error("[DEBUG] First 10 packet bytes:");
+    // for (int i = 0; i < 10 && i < size; i++) {
+    //     rs2_error("  [%d]: 0x%02X", i, (uint8_t)buf->data[i]);
+    // }
+    
     getPlayerLocal(c, buf, size);
+    // rs2_error("[DEBUG] After getPlayerLocal - pos:%d\n", buf->pos);
+    
     getPlayerOldVis(c, buf, size);
+    // rs2_error("[DEBUG] After getPlayerOldVis - pos:%d\n", buf->pos);
+    
     getPlayerNewVis(c, size, buf);
+    // rs2_error("[DEBUG] After getPlayerNewVis - pos:%d\n", buf->pos);
+    
     getPlayerExtended(c, buf, size);
+    // rs2_error("[DEBUG] After getPlayerExtended - pos:%d, expected:%d\n", buf->pos, size);
 
     for (int i = 0; i < c->entityRemovalCount; i++) {
         int index = c->entityRemovalIds[i];
@@ -7462,7 +7549,22 @@ void client_login(Client *c, const char *username, const char *password, bool re
     p4(c->out, _Client.uid);
     pjstr(c->out, username);
     pjstr(c->out, password);
-    rsaenc(c->out, _Client.rsa_modulus, _Client.rsa_exponent);
+    
+    // Only use RSA if keys are provided
+    if (_Client.rsa_modulus != NULL && _Client.rsa_exponent != NULL && 
+        strlen(_Client.rsa_modulus) > 0 && strlen(_Client.rsa_exponent) > 0) {
+        rsaenc(c->out, _Client.rsa_modulus, _Client.rsa_exponent);
+    } else {
+        // No RSA - send plaintext with length prefix
+        int plaintext_len = c->out->pos;
+        int8_t *temp = malloc(plaintext_len);
+        c->out->pos = 0;
+        gdata(c->out, plaintext_len, 0, temp);
+        c->out->pos = 0;
+        p1(c->out, plaintext_len);
+        pdata(c->out, temp, plaintext_len, 0);
+        free(temp);
+    }
 
     c->login->pos = 0;
     if (reconnect) {
@@ -9645,7 +9747,11 @@ void client_update_interface_content(Client *c, Component *component) {
             }
 
             model_create_label_references(model, false);
-            model_apply_transform(model, _SeqType.instances[c->local_player->pathing_entity.seqStandId]->frames[0]);
+            // Fix: Check if seqStandId is valid before accessing _SeqType.instances array
+            int32_t seqStandId = c->local_player->pathing_entity.seqStandId;
+            if (seqStandId != 65535 && seqStandId >= 0 && seqStandId < _SeqType.count && _SeqType.instances[seqStandId] != NULL) {
+                model_apply_transform(model, _SeqType.instances[seqStandId]->frames[0]);
+            }
             model_calculate_normals(model, 64, 850, -30, -50, -30, true, false);
             component->model = model;
         }
@@ -10402,17 +10508,15 @@ int main(int argc, char **argv) {
         goto init;
     }
 
-    if (argc != 5) {
-        rs2_error("Usage: node-id, port-offset, [lowmem/highmem], [free/members]\n");
-        return 0;
-    } else {
+    if (argc == 9) {
+        // Extended format: nodeid portoffset lowmem/highmem free/members ip port username password
         _Client.nodeid = atoi(argv[1]);
         _Client.portoff = atoi(argv[2]);
         if (strcmp(argv[3], "lowmem") == 0) {
             client_set_lowmem();
         } else {
             if (strcmp(argv[3], "highmem") != 0) {
-                rs2_error("Usage: node-id, port-offset, [lowmem/highmem], [free/members]\n");
+                rs2_error("Usage: node-id port-offset [lowmem/highmem] [free/members] [ip port username password]\n");
                 return 0;
             }
             client_set_highmem();
@@ -10421,7 +10525,38 @@ int main(int argc, char **argv) {
             _Client.members = false;
         } else {
             if (strcmp(argv[4], "members") != 0) {
-                rs2_error("Usage: node-id, port-offset, [lowmem/highmem], [free/members]\n");
+                rs2_error("Usage: node-id port-offset [lowmem/highmem] [free/members] [ip port username password]\n");
+                return 0;
+            }
+            _Client.members = true;
+        }
+        strncpy(_Client.socketip, argv[5], sizeof(_Client.socketip) - 1);
+        _Custom.http_port = atoi(argv[6]);
+        strncpy(cmdline_username, argv[7], sizeof(cmdline_username) - 1);
+        strncpy(cmdline_password, argv[8], sizeof(cmdline_password) - 1);
+        _Custom.remember_username = true;
+        _Custom.remember_password = true;
+        _Custom.resizable = true;
+    } else if (argc != 5) {
+        rs2_error("Usage: node-id port-offset [lowmem/highmem] [free/members] [ip port username password]\n");
+        return 0;
+    } else {
+        _Client.nodeid = atoi(argv[1]);
+        _Client.portoff = atoi(argv[2]);
+        if (strcmp(argv[3], "lowmem") == 0) {
+            client_set_lowmem();
+        } else {
+            if (strcmp(argv[3], "highmem") != 0) {
+                rs2_error("Usage: node-id port-offset [lowmem/highmem] [free/members] [ip port username password]\n");
+                return 0;
+            }
+            client_set_highmem();
+        }
+        if (strcmp(argv[4], "free") == 0) {
+            _Client.members = false;
+        } else {
+            if (strcmp(argv[4], "members") != 0) {
+                rs2_error("Usage: node-id port-offset [lowmem/highmem] [free/members] [ip port username password]\n");
                 return 0;
             }
             _Client.members = true;
@@ -10442,6 +10577,15 @@ init:
 
     Client *c = client_new();
     load_ini_config(c);
+    
+    // Apply command-line username/password if provided
+    if (cmdline_username[0] != '\0') {
+        strncpy(c->username, cmdline_username, sizeof(c->username) - 1);
+    }
+    if (cmdline_password[0] != '\0') {
+        strncpy(c->password, cmdline_password, sizeof(c->password) - 1);
+    }
+    
     gameshell_init_application(c, SCREEN_WIDTH, SCREEN_HEIGHT);
     return 0;
 }
